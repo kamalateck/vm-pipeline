@@ -51,29 +51,27 @@ pipeline {
         }
 
         stage('Deploy to VM') {
-            steps {
-                script {
-                    sshagent(['vm-ssh-key']) {
+    steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'vm-ssh-key',
+                                          keyFileVariable: 'KEY',
+                                          usernameVariable: 'USER')]) {
 
-                        sh """
-                        ssh -o StrictHostKeyChecking=no ${VM_USER}@${VM_IP} '
-                            
-                            echo "Stopping old container..."
-                            docker stop ${CONTAINER_NAME} || true
-                            docker rm ${CONTAINER_NAME} || true
+            sh """
+            ssh -o StrictHostKeyChecking=no -i $KEY $USER@34.171.135.166 '
+                echo "Stopping old container..."
+                docker stop vm-container || true
+                docker rm vm-container || true
 
-                            echo "Pulling latest image..."
-                            docker pull ${DOCKER_HUB_CREDENTIALS_USR}/${IMAGE_NAME}:${BUILD_NUMBER}
+                echo "Pulling new image..."
+                docker pull kamalteck/vmimage:${BUILD_NUMBER}
 
-                            echo "Running new container..."
-                            docker run -d -p 8000:8000 --name ${CONTAINER_NAME} \
-                            ${DOCKER_HUB_CREDENTIALS_USR}/${IMAGE_NAME}:${BUILD_NUMBER}
-                        '
-                        """
-                    }
-                }
-            }
+                echo "Running new container..."
+                docker run -d -p 8000:8000 --name vm-container kamalteck/vmimage:${BUILD_NUMBER}
+            '
+            """
         }
+    }
+}
 
         stage('Cleanup Workspace') {
             steps {
