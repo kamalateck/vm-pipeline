@@ -9,7 +9,7 @@ pipeline {
         IMAGE_NAME = 'vmimage'
         DOCKER_HUB_CREDENTIALS_PSWD = credentials('docker-hub-password')
 
-        VM_USER = 'debian'
+        VM_USER = 'nikhilesh_narra09'
         VM_IP = '34.171.135.166'
         CONTAINER_NAME = 'vmimage'
     }
