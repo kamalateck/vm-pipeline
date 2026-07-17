@@ -10,9 +10,7 @@ pipeline {
 
     }
 
-
     stages {
-
 
         stage('Clone Repository') {
 
@@ -25,8 +23,6 @@ pipeline {
 
             }
         }
-
-
 
         stage('Build Docker Image') {
 
@@ -42,8 +38,6 @@ pipeline {
             }
         }
 
-
-
         stage('Authenticate Dev GCP') {
 
             steps {
@@ -55,19 +49,15 @@ pipeline {
                     )
                 ]) {
 
-
                     sh """
 
                     gcloud auth activate-service-account \
-                    --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-
+                    --key-file=\$GOOGLE_APPLICATION_CREDENTIALS
 
                     gcloud config set project ${DEV_PROJECT_ID}
 
-
                     gcloud auth configure-docker \
-                    ${REGION}-docker.pkg.dev
-
+                    ${REGION}-docker.pkg.dev --quiet
 
                     """
 
@@ -75,8 +65,6 @@ pipeline {
 
             }
         }
-
-
 
         stage('Push Image To Dev Artifact Registry') {
 
@@ -91,12 +79,9 @@ pipeline {
             }
         }
 
-
-
         stage('Deploy To Dev VM') {
 
             steps {
-
 
                 withCredentials([
                     sshUserPrivateKey(
@@ -105,17 +90,14 @@ pipeline {
                     )
                 ]) {
 
-
                     sh """
 
-                    chmod 600 $SSH_KEY
-
+                    chmod 600 \$SSH_KEY
 
                     ssh \
                     -o StrictHostKeyChecking=no \
-                    -i $SSH_KEY \
+                    -i \$SSH_KEY \
                     ${DEV_VM_USER}@${DEV_VM_IP} << EOF
-
 
                     echo "Stopping old Dev container"
 
@@ -123,13 +105,9 @@ pipeline {
 
                     docker rm ${CONTAINER_NAME} || true
 
-
-
                     echo "Pulling Dev image"
 
                     docker pull ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
-
-
 
                     echo "Starting Dev container"
 
@@ -138,7 +116,6 @@ pipeline {
                     -p 8000:8000 \
                     --name ${CONTAINER_NAME} \
                     ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
-
 
 EOF
 
@@ -149,9 +126,6 @@ EOF
             }
 
         }
-
-
-
 
         stage('Manual Approval For UAT') {
 
@@ -166,9 +140,6 @@ EOF
 
         }
 
-
-
-
         stage('Authenticate UAT GCP') {
 
             steps {
@@ -180,19 +151,15 @@ EOF
                     )
                 ]) {
 
-
                     sh """
 
                     gcloud auth activate-service-account \
-                    --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-
+                    --key-file=\$GOOGLE_APPLICATION_CREDENTIALS
 
                     gcloud config set project ${UAT_PROJECT_ID}
 
-
                     gcloud auth configure-docker \
-                    ${REGION}-docker.pkg.dev
-
+                    ${REGION}-docker.pkg.dev --quiet
 
                     """
 
@@ -201,9 +168,6 @@ EOF
             }
 
         }
-
-
-
 
         stage('Tag And Push Image To UAT Artifact Registry') {
 
@@ -215,10 +179,8 @@ EOF
                 ${DEV_IMAGE_PATH}:${BUILD_NUMBER} \
                 ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
 
-
                 docker push \
                 ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
-
 
                 """
 
@@ -226,32 +188,25 @@ EOF
 
         }
 
-
-
-
         stage('Deploy To UAT VM') {
 
             steps {
 
-
                 withCredentials([
                     sshUserPrivateKey(
-                        credentialsId: 'vm-ssh-key',
+                        credentialsId: 'vm-uat-ssh-key',
                         keyFileVariable: 'SSH_KEY'
                     )
                 ]) {
 
-
                     sh """
 
-                    chmod 600 $SSH_KEY
-
+                    chmod 600 \$SSH_KEY
 
                     ssh \
                     -o StrictHostKeyChecking=no \
-                    -i $SSH_KEY \
+                    -i \$SSH_KEY \
                     ${UAT_VM_USER}@${UAT_VM_IP} << EOF
-
 
                     echo "Stopping old UAT container"
 
@@ -259,13 +214,9 @@ EOF
 
                     docker rm ${CONTAINER_NAME} || true
 
-
-
                     echo "Pulling UAT image"
 
                     docker pull ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
-
-
 
                     echo "Starting UAT container"
 
@@ -274,7 +225,6 @@ EOF
                     -p 8000:8000 \
                     --name ${CONTAINER_NAME} \
                     ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
-
 
 EOF
 
@@ -285,9 +235,6 @@ EOF
             }
 
         }
-
-
-
 
         stage('Cleanup Workspace') {
 
