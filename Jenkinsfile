@@ -6,12 +6,13 @@ pipeline {
     parameters {
 
         choice(
-            name: 'ENVIRONMENT',
-            choices: ['dev', 'uat'],
-            description: 'Select deployment environment'
+            name: 'DEPLOY_TARGET',
+            choices: ['dev'],
+            description: 'Start deployment from Dev environment'
         )
 
     }
+
 
 
     environment {
@@ -26,48 +27,28 @@ pipeline {
     stages {
 
 
-        stage('Load Environment Configuration') {
+        stage('Load Dev Configuration') {
+
 
             steps {
+
 
                 script {
 
 
-                    if (params.ENVIRONMENT == 'dev') {
-
-
-                        env.PROJECT_ID = DEV_PROJECT_ID
-                        env.IMAGE_PATH = DEV_IMAGE_PATH
-
-                        env.VM_IP = DEV_VM_IP
-                        env.VM_USER = DEV_VM_USER
-
-                        env.GCP_CREDENTIAL = "gcp-service-account-dev"
-
-                        env.SSH_CREDENTIAL = "vm-ssh-key"
-
-
-                    }
-
-
-                    else {
-
-
-                        env.PROJECT_ID = UAT_PROJECT_ID
-                        env.IMAGE_PATH = UAT_IMAGE_PATH
-
-                        env.VM_IP = UAT_VM_IP
-                        env.VM_USER = UAT_VM_USER
-
-                        env.GCP_CREDENTIAL = "gcp-service-account-uat"
-
-                        env.SSH_CREDENTIAL = "vm-uat-ssh-key"
-
-
-                    }
-
-
                     env.IMAGE_TAG = BUILD_NUMBER
+
+
+                    env.DEV_PROJECT = DEV_PROJECT_ID
+                    env.DEV_IMAGE = DEV_IMAGE_PATH
+                    env.DEV_VM = DEV_VM_IP
+                    env.DEV_USER = DEV_VM_USER
+
+
+                    env.UAT_PROJECT = UAT_PROJECT_ID
+                    env.UAT_IMAGE = UAT_IMAGE_PATH
+                    env.UAT_VM = UAT_VM_IP
+                    env.UAT_USER = UAT_VM_USER
 
 
                 }
@@ -79,18 +60,24 @@ pipeline {
 
 
 
+
         stage('Clone Repository') {
 
+
             steps {
+
 
                 git(
                     branch: 'main',
                     url: 'https://github.com/kamalateck/vm-pipeline.git'
                 )
 
+
             }
 
         }
+
+
 
 
 
@@ -105,11 +92,14 @@ pipeline {
                 sh """
 
                 docker build \
-                -t ${IMAGE_PATH}:${IMAGE_TAG} .
+                -t ${DEV_IMAGE}:${IMAGE_TAG} .
+
 
                 """
 
+
             }
+
 
         }
 
@@ -118,7 +108,8 @@ pipeline {
 
 
 
-        stage('Authenticate GCP') {
+
+        stage('Authenticate Dev GCP') {
 
 
             steps {
@@ -127,7 +118,7 @@ pipeline {
                 withCredentials([
 
                     file(
-                        credentialsId: "${GCP_CREDENTIAL}",
+                        credentialsId: 'gcp-service-account-dev',
                         variable: 'GOOGLE_APPLICATION_CREDENTIALS'
                     )
 
@@ -141,7 +132,7 @@ pipeline {
                     --key-file=$GOOGLE_APPLICATION_CREDENTIALS
 
 
-                    gcloud config set project ${PROJECT_ID}
+                    gcloud config set project ${DEV_PROJECT}
 
 
 
@@ -150,11 +141,15 @@ pipeline {
                     --quiet
 
 
+
                     """
+
 
                 }
 
+
             }
+
 
         }
 
@@ -164,7 +159,7 @@ pipeline {
 
 
 
-        stage('Push Image To Artifact Registry') {
+        stage('Push Image To Dev Artifact Registry') {
 
 
             steps {
@@ -173,12 +168,14 @@ pipeline {
                 sh """
 
 
-                docker push ${IMAGE_PATH}:${IMAGE_TAG}
+                docker push ${DEV_IMAGE}:${IMAGE_TAG}
 
 
                 """
 
+
             }
+
 
         }
 
@@ -188,7 +185,7 @@ pipeline {
 
 
 
-        stage('Deploy To VM') {
+        stage('Deploy Dev VM') {
 
 
             steps {
@@ -197,7 +194,7 @@ pipeline {
                 withCredentials([
 
                     sshUserPrivateKey(
-                        credentialsId: "${SSH_CREDENTIAL}",
+                        credentialsId: 'vm-ssh-key',
                         keyFileVariable: 'SSH_KEY'
                     )
 
@@ -214,7 +211,7 @@ pipeline {
                     ssh \
                     -o StrictHostKeyChecking=no \
                     -i $SSH_KEY \
-                    ${VM_USER}@${VM_IP} << EOF
+                    ${DEV_USER}@${DEV_VM} << EOF
 
 
 
@@ -225,6 +222,7 @@ pipeline {
                     gcloud auth configure-docker \
                     ${REGION}-docker.pkg.dev \
                     --quiet
+
 
 
 
@@ -242,17 +240,18 @@ pipeline {
 
 
 
-                    echo "Pulling new image"
+                    echo "Pulling Dev image"
 
 
 
-                    docker pull ${IMAGE_PATH}:${IMAGE_TAG}
+                    docker pull ${DEV_IMAGE}:${IMAGE_TAG}
 
 
 
 
 
-                    echo "Starting container"
+
+                    echo "Starting Dev container"
 
 
 
@@ -260,7 +259,7 @@ pipeline {
                     --restart always \
                     -p 8000:8000 \
                     --name ${CONTAINER_NAME} \
-                    ${IMAGE_PATH}:${IMAGE_TAG}
+                    ${DEV_IMAGE}:${IMAGE_TAG}
 
 
 
@@ -269,12 +268,230 @@ EOF
 
                     """
 
+
                 }
 
 
             }
 
+
         }
+
+
+
+
+
+
+
+        stage('Manual Approval For UAT') {
+
+
+            steps {
+
+
+                input(
+
+                    message: 'Dev deployment completed. Approve deployment to UAT?',
+
+                    ok: 'Deploy To UAT'
+
+                )
+
+
+            }
+
+
+        }
+
+
+
+
+
+
+
+        stage('Authenticate UAT GCP') {
+
+
+            steps {
+
+
+                withCredentials([
+
+                    file(
+                        credentialsId: 'gcp-service-account-uat',
+                        variable: 'GOOGLE_APPLICATION_CREDENTIALS'
+                    )
+
+                ]) {
+
+
+                    sh """
+
+
+                    gcloud auth activate-service-account \
+                    --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+
+
+
+                    gcloud config set project ${UAT_PROJECT}
+
+
+
+
+
+                    gcloud auth configure-docker \
+                    ${REGION}-docker.pkg.dev \
+                    --quiet
+
+
+
+                    """
+
+
+                }
+
+
+            }
+
+
+        }
+
+
+
+
+
+
+
+
+        stage('Promote Image To UAT Registry') {
+
+
+            steps {
+
+
+                sh """
+
+
+                docker tag \
+                ${DEV_IMAGE}:${IMAGE_TAG} \
+                ${UAT_IMAGE}:${IMAGE_TAG}
+
+
+
+
+                docker push \
+                ${UAT_IMAGE}:${IMAGE_TAG}
+
+
+
+                """
+
+
+            }
+
+
+        }
+
+
+
+
+
+
+
+        stage('Deploy UAT VM') {
+
+
+            steps {
+
+
+                withCredentials([
+
+                    sshUserPrivateKey(
+                        credentialsId: 'vm-uat-ssh-key',
+                        keyFileVariable: 'SSH_KEY'
+                    )
+
+                ]) {
+
+
+                    sh """
+
+
+                    chmod 600 $SSH_KEY
+
+
+
+                    ssh \
+                    -o StrictHostKeyChecking=no \
+                    -i $SSH_KEY \
+                    ${UAT_USER}@${UAT_VM} << EOF
+
+
+
+
+
+                    echo "Configuring Docker authentication"
+
+
+
+                    gcloud auth configure-docker \
+                    ${REGION}-docker.pkg.dev \
+                    --quiet
+
+
+
+
+
+                    echo "Stopping old UAT container"
+
+
+
+                    docker stop ${CONTAINER_NAME} || true
+
+
+                    docker rm ${CONTAINER_NAME} || true
+
+
+
+
+
+
+                    echo "Pulling UAT image"
+
+
+
+                    docker pull ${UAT_IMAGE}:${IMAGE_TAG}
+
+
+
+
+
+                    echo "Starting UAT container"
+
+
+
+                    docker run -d \
+                    --restart always \
+                    -p 8000:8000 \
+                    --name ${CONTAINER_NAME} \
+                    ${UAT_IMAGE}:${IMAGE_TAG}
+
+
+
+EOF
+
+
+                    """
+
+
+                }
+
+
+            }
+
+
+        }
+
 
 
 
@@ -291,6 +508,7 @@ EOF
 
 
             }
+
 
         }
 
