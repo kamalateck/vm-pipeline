@@ -2,15 +2,82 @@ pipeline {
 
     agent any
 
+
+    parameters {
+
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'uat'],
+            description: 'Select deployment environment'
+        )
+
+    }
+
+
     environment {
 
         IMAGE_NAME = 'vmimage'
         CONTAINER_NAME = 'vmimage'
-        REGION = 'europe-west2'
 
     }
 
+
+
     stages {
+
+
+        stage('Load Environment Configuration') {
+
+            steps {
+
+                script {
+
+
+                    if (params.ENVIRONMENT == 'dev') {
+
+
+                        env.PROJECT_ID = DEV_PROJECT_ID
+                        env.IMAGE_PATH = DEV_IMAGE_PATH
+
+                        env.VM_IP = DEV_VM_IP
+                        env.VM_USER = DEV_VM_USER
+
+                        env.GCP_CREDENTIAL = "gcp-service-account-dev"
+
+                        env.SSH_CREDENTIAL = "vm-ssh-key"
+
+
+                    }
+
+
+                    else {
+
+
+                        env.PROJECT_ID = UAT_PROJECT_ID
+                        env.IMAGE_PATH = UAT_IMAGE_PATH
+
+                        env.VM_IP = UAT_VM_IP
+                        env.VM_USER = UAT_VM_USER
+
+                        env.GCP_CREDENTIAL = "gcp-service-account-uat"
+
+                        env.SSH_CREDENTIAL = "vm-uat-ssh-key"
+
+
+                    }
+
+
+                    env.IMAGE_TAG = BUILD_NUMBER
+
+
+                }
+
+            }
+
+        }
+
+
+
 
         stage('Clone Repository') {
 
@@ -22,256 +89,213 @@ pipeline {
                 )
 
             }
+
         }
+
+
+
+
 
         stage('Build Docker Image') {
 
+
             steps {
+
 
                 sh """
 
                 docker build \
-                -t ${DEV_IMAGE_PATH}:${BUILD_NUMBER} .
+                -t ${IMAGE_PATH}:${IMAGE_TAG} .
 
                 """
 
             }
+
         }
 
-        stage('Authenticate Dev GCP') {
+
+
+
+
+
+        stage('Authenticate GCP') {
+
 
             steps {
 
+
                 withCredentials([
+
                     file(
-                        credentialsId: 'gcp-service-account-dev',
+                        credentialsId: "${GCP_CREDENTIAL}",
                         variable: 'GOOGLE_APPLICATION_CREDENTIALS'
                     )
+
                 ]) {
+
 
                     sh """
 
-                    gcloud auth activate-service-account \
-                    --key-file=\$GOOGLE_APPLICATION_CREDENTIALS
 
-                    gcloud config set project ${DEV_PROJECT_ID}
+                    gcloud auth activate-service-account \
+                    --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+
+
+                    gcloud config set project ${PROJECT_ID}
+
+
 
                     gcloud auth configure-docker \
-                    ${REGION}-docker.pkg.dev --quiet
+                    ${REGION}-docker.pkg.dev \
+                    --quiet
+
 
                     """
 
                 }
 
             }
+
         }
 
-        stage('Push Image To Dev Artifact Registry') {
+
+
+
+
+
+
+        stage('Push Image To Artifact Registry') {
+
 
             steps {
 
+
                 sh """
 
-                docker push ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
+
+                docker push ${IMAGE_PATH}:${IMAGE_TAG}
+
 
                 """
 
             }
+
         }
 
-        stage('Deploy To Dev VM') {
+
+
+
+
+
+
+        stage('Deploy To VM') {
+
 
             steps {
 
+
                 withCredentials([
+
                     sshUserPrivateKey(
-                        credentialsId: 'vm-ssh-key',
+                        credentialsId: "${SSH_CREDENTIAL}",
                         keyFileVariable: 'SSH_KEY'
                     )
+
                 ]) {
+
 
                     sh """
 
-                    chmod 600 \$SSH_KEY
+
+                    chmod 600 $SSH_KEY
+
+
 
                     ssh \
                     -o StrictHostKeyChecking=no \
-                    -i \$SSH_KEY \
-                    ${DEV_VM_USER}@${DEV_VM_IP} << EOF
+                    -i $SSH_KEY \
+                    ${VM_USER}@${VM_IP} << EOF
+
 
 
                     echo "Configuring Docker authentication"
 
+
+
                     gcloud auth configure-docker \
-                    ${REGION}-docker.pkg.dev --quiet
+                    ${REGION}-docker.pkg.dev \
+                    --quiet
 
 
-                    echo "Stopping old Dev container"
+
+
+                    echo "Stopping old container"
+
+
 
                     docker stop ${CONTAINER_NAME} || true
+
 
                     docker rm ${CONTAINER_NAME} || true
 
 
-                    echo "Pulling Dev image"
-
-                    docker pull ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
 
 
-                    echo "Starting Dev container"
+
+                    echo "Pulling new image"
+
+
+
+                    docker pull ${IMAGE_PATH}:${IMAGE_TAG}
+
+
+
+
+
+                    echo "Starting container"
+
+
 
                     docker run -d \
                     --restart always \
                     -p 8000:8000 \
                     --name ${CONTAINER_NAME} \
-                    ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
+                    ${IMAGE_PATH}:${IMAGE_TAG}
 
-
-EOF
-
-                    """
-
-                }
-
-            }
-
-        }
-
-
-        stage('Manual Approval For UAT') {
-
-            steps {
-
-                input(
-                    message: 'Dev deployment completed. Approve deployment to UAT?',
-                    ok: 'Deploy To UAT'
-                )
-
-            }
-
-        }
-
-
-        stage('Authenticate UAT GCP') {
-
-            steps {
-
-                withCredentials([
-                    file(
-                        credentialsId: 'gcp-service-account-uat',
-                        variable: 'GOOGLE_APPLICATION_CREDENTIALS'
-                    )
-                ]) {
-
-                    sh """
-
-                    gcloud auth activate-service-account \
-                    --key-file=\$GOOGLE_APPLICATION_CREDENTIALS
-
-                    gcloud config set project ${UAT_PROJECT_ID}
-
-                    gcloud auth configure-docker \
-                    ${REGION}-docker.pkg.dev --quiet
-
-                    """
-
-                }
-
-            }
-
-        }
-
-
-        stage('Tag And Push Image To UAT Artifact Registry') {
-
-            steps {
-
-                sh """
-
-                docker tag \
-                ${DEV_IMAGE_PATH}:${BUILD_NUMBER} \
-                ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
-
-
-                docker push \
-                ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
-
-                """
-
-            }
-
-        }
-
-
-        stage('Deploy To UAT VM') {
-
-            steps {
-
-                withCredentials([
-                    sshUserPrivateKey(
-                        credentialsId: 'vm-uat-ssh-key',
-                        keyFileVariable: 'SSH_KEY'
-                    )
-                ]) {
-
-                    sh """
-
-                    chmod 600 \$SSH_KEY
-
-                    ssh \
-                    -o StrictHostKeyChecking=no \
-                    -i \$SSH_KEY \
-                    ${UAT_VM_USER}@${UAT_VM_IP} << EOF
-
-
-                    echo "Configuring Docker authentication"
-
-                    gcloud auth configure-docker \
-                    ${REGION}-docker.pkg.dev --quiet
-
-
-                    echo "Stopping old UAT container"
-
-                    docker stop ${CONTAINER_NAME} || true
-
-                    docker rm ${CONTAINER_NAME} || true
-
-
-                    echo "Pulling UAT image"
-
-                    docker pull ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
-
-
-                    echo "Starting UAT container"
-
-                    docker run -d \
-                    --restart always \
-                    -p 8000:8000 \
-                    --name ${CONTAINER_NAME} \
-                    ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
 
 
 EOF
 
+
                     """
 
                 }
 
+
             }
 
         }
+
+
+
+
 
 
         stage('Cleanup Workspace') {
 
+
             steps {
 
+
                 cleanWs()
+
 
             }
 
         }
 
+
     }
+
 
 }
