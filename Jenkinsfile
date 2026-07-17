@@ -1,86 +1,304 @@
 pipeline {
+
     agent any
 
     environment {
-        PROJECT_ID = 'new-dev-492605'
-        GOOGLE_APPLICATION_CREDENTIALS = credentials('gcp-service-account')
 
-        DOCKER_HUB_CREDENTIALS_USR = 'kamalteck'
         IMAGE_NAME = 'vmimage'
-        DOCKER_HUB_CREDENTIALS_PSWD = credentials('docker-hub-password')
-
-        VM_USER = 'nikhilesh_narra09'
-        VM_IP = '34.171.135.166'
         CONTAINER_NAME = 'vmimage'
+        REGION = 'europe-west2'
+
     }
+
 
     stages {
 
+
         stage('Clone Repository') {
+
             steps {
-                git branch: 'main', url: 'https://github.com/kamalateck/vm-pipeline.git'
+
+                git(
+                    branch: 'main',
+                    url: 'https://github.com/kamalateck/vm-pipeline.git'
+                )
+
             }
         }
+
+
 
         stage('Build Docker Image') {
+
             steps {
-                script {
+
+                sh """
+
+                docker build \
+                -t ${DEV_IMAGE_PATH}:${BUILD_NUMBER} .
+
+                """
+
+            }
+        }
+
+
+
+        stage('Authenticate Dev GCP') {
+
+            steps {
+
+                withCredentials([
+                    file(
+                        credentialsId: 'gcp-service-account-dev',
+                        variable: 'GOOGLE_APPLICATION_CREDENTIALS'
+                    )
+                ]) {
+
+
                     sh """
-                    docker build -t ${DOCKER_HUB_CREDENTIALS_USR}/${IMAGE_NAME}:${BUILD_NUMBER} .
+
+                    gcloud auth activate-service-account \
+                    --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+
+
+                    gcloud config set project ${DEV_PROJECT_ID}
+
+
+                    gcloud auth configure-docker \
+                    ${REGION}-docker.pkg.dev
+
+
                     """
+
                 }
+
             }
         }
 
-        stage('Login & Push to Docker Hub') {
+
+
+        stage('Push Image To Dev Artifact Registry') {
+
             steps {
-                script {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'docker-hub-password',
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )]) {
 
-                        sh """
-                        echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
-                        docker push ${DOCKER_HUB_CREDENTIALS_USR}/${IMAGE_NAME}:${BUILD_NUMBER}
-                        """
-                    }
-                }
+                sh """
+
+                docker push ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
+
+                """
+
             }
         }
 
-  stage('Deploy to VM') {
-    steps {
-        withCredentials([sshUserPrivateKey(
-            credentialsId: 'vm-ssh-key',
-            keyFileVariable: 'KEY',
-            usernameVariable: 'VM_USER'
-        )]) {
 
-            sh """
-            chmod 600 $KEY
 
-            ssh -o StrictHostKeyChecking=no -i $KEY $VM_USER@${VM_IP} '
-                echo "Stopping old container..."
-                docker stop ${CONTAINER_NAME} || true
-                docker rm ${CONTAINER_NAME} || true
+        stage('Deploy To Dev VM') {
 
-                echo "Pulling new image..."
-                docker pull ${DOCKER_HUB_CREDENTIALS_USR}/${IMAGE_NAME}:${BUILD_NUMBER}
+            steps {
 
-                echo "Running new container..."
-                docker run -d -p 8000:8000 --name ${CONTAINER_NAME} ${DOCKER_HUB_CREDENTIALS_USR}/${IMAGE_NAME}:${BUILD_NUMBER}
-            '
-            """
+
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'vm-ssh-key',
+                        keyFileVariable: 'SSH_KEY'
+                    )
+                ]) {
+
+
+                    sh """
+
+                    chmod 600 $SSH_KEY
+
+
+                    ssh \
+                    -o StrictHostKeyChecking=no \
+                    -i $SSH_KEY \
+                    ${DEV_VM_USER}@${DEV_VM_IP} << EOF
+
+
+                    echo "Stopping old Dev container"
+
+                    docker stop ${CONTAINER_NAME} || true
+
+                    docker rm ${CONTAINER_NAME} || true
+
+
+
+                    echo "Pulling Dev image"
+
+                    docker pull ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
+
+
+
+                    echo "Starting Dev container"
+
+                    docker run -d \
+                    --restart always \
+                    -p 8000:8000 \
+                    --name ${CONTAINER_NAME} \
+                    ${DEV_IMAGE_PATH}:${BUILD_NUMBER}
+
+
+EOF
+
+                    """
+
+                }
+
+            }
+
         }
-    }
-}
+
+
+
+
+        stage('Manual Approval For UAT') {
+
+            steps {
+
+                input(
+                    message: 'Dev deployment completed. Approve deployment to UAT?',
+                    ok: 'Deploy To UAT'
+                )
+
+            }
+
+        }
+
+
+
+
+        stage('Authenticate UAT GCP') {
+
+            steps {
+
+                withCredentials([
+                    file(
+                        credentialsId: 'gcp-service-account-uat',
+                        variable: 'GOOGLE_APPLICATION_CREDENTIALS'
+                    )
+                ]) {
+
+
+                    sh """
+
+                    gcloud auth activate-service-account \
+                    --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+
+
+                    gcloud config set project ${UAT_PROJECT_ID}
+
+
+                    gcloud auth configure-docker \
+                    ${REGION}-docker.pkg.dev
+
+
+                    """
+
+                }
+
+            }
+
+        }
+
+
+
+
+        stage('Tag And Push Image To UAT Artifact Registry') {
+
+            steps {
+
+                sh """
+
+                docker tag \
+                ${DEV_IMAGE_PATH}:${BUILD_NUMBER} \
+                ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
+
+
+                docker push \
+                ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
+
+
+                """
+
+            }
+
+        }
+
+
+
+
+        stage('Deploy To UAT VM') {
+
+            steps {
+
+
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'vm-ssh-key',
+                        keyFileVariable: 'SSH_KEY'
+                    )
+                ]) {
+
+
+                    sh """
+
+                    chmod 600 $SSH_KEY
+
+
+                    ssh \
+                    -o StrictHostKeyChecking=no \
+                    -i $SSH_KEY \
+                    ${UAT_VM_USER}@${UAT_VM_IP} << EOF
+
+
+                    echo "Stopping old UAT container"
+
+                    docker stop ${CONTAINER_NAME} || true
+
+                    docker rm ${CONTAINER_NAME} || true
+
+
+
+                    echo "Pulling UAT image"
+
+                    docker pull ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
+
+
+
+                    echo "Starting UAT container"
+
+                    docker run -d \
+                    --restart always \
+                    -p 8000:8000 \
+                    --name ${CONTAINER_NAME} \
+                    ${UAT_IMAGE_PATH}:${BUILD_NUMBER}
+
+
+EOF
+
+                    """
+
+                }
+
+            }
+
+        }
+
+
+
 
         stage('Cleanup Workspace') {
+
             steps {
+
                 cleanWs()
+
             }
+
         }
+
     }
+
 }
