@@ -21,8 +21,7 @@ env:
 
   IMAGE_TAG: ${{ github.run_number }}
 
-  PREVIOUS_IMAGE_TAG: ${{ github.run_number - 1 }}
-
+  
 
 
 jobs:
@@ -55,6 +54,14 @@ jobs:
     - name: Checkout Code
 
       uses: actions/checkout@v4
+
+    - name: Generate Previous Image Tag
+
+      run: |
+
+        echo "IMAGE_TAG=${{ github.run_number }}" >> $GITHUB_ENV
+
+        echo "PREVIOUS_IMAGE_TAG=$((${{ github.run_number }} - 1))" >> $GITHUB_ENV
 
 
 
